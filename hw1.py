@@ -5,6 +5,7 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score, roc_curve
 
+# 데이터 로드 및 전처리
 def load_data(filename):
     df = pd.read_csv(filename)
     X = df.iloc[:, :-1].values  # Features
@@ -15,130 +16,167 @@ def stratified_split(X, y, test_size=0.2):
     return train_test_split(X, y, test_size=test_size, stratify=y, random_state=42)
 
 def compute_metrics(y_true, y_pred):
-    TP = np.sum((y_true == 1) & (y_pred == 1))
-    FP = np.sum((y_true == 0) & (y_pred == 1))
-    FN = np.sum((y_true == 1) & (y_pred == 0))
-    TN = np.sum((y_true == 0) & (y_pred == 0))
-    
-    TPR = TP / (TP + FN) if (TP + FN) > 0 else 0
-    FPR = FP / (FP + TN) if (FP + TN) > 0 else 0
-    AUC = roc_auc_score(y_true, y_pred)
-    
-    return TPR, FPR, AUC
+    auc = roc_auc_score(y_true, y_pred)
+    return auc
 
-def plot_roc_curve(y_true, y_scores, title):
+def plot_roc_curve(ax, y_true, y_scores, title):
     fpr, tpr, _ = roc_curve(y_true, y_scores)
     auc_score = roc_auc_score(y_true, y_scores)
-    plt.plot(fpr, tpr, label=f'{title} (AUC = {auc_score:.2f})')
+    ax.plot(fpr, tpr, label=f'{title} (AUC = {auc_score:.2f})')
+    ax.set_xlabel("False Positive Rate")
+    ax.set_ylabel("True Positive Rate")
+    ax.set_title(title)
+    ax.legend()
 
-def adaboost(X_train, y_train, X_test, y_test, T=50):
-    n_samples = X_train.shape[0]
-    weights = np.ones(n_samples) / n_samples
-    classifiers = []
-    alpha_values = []
+def plot_depth_changes(ax, depths, title):
+    ax.plot(range(1, len(depths) + 1), depths, marker='o', label=title)
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel("Tree Depth")
+    ax.set_title(title)
+    ax.legend()
+
+class AdaBoost:
+    def __init__(self, T=50, max_depth=5):
+        self.T = T
+        self.max_depth = max_depth
+        self.classifiers = []
+        self.alpha_values = []
+        self.depths = []
     
-    for t in range(T):
-        clf = DecisionTreeClassifier(max_depth=5)
-        clf.fit(X_train, y_train, sample_weight=weights)
-        y_pred_train = clf.predict(X_train)
-        err = np.sum(weights * (y_pred_train != y_train)) / np.sum(weights)
-        alpha = 0.5 * np.log((1 - err) / (err + 1e-10))
+    def train(self, X_train, y_train):
+        n_samples = X_train.shape[0]
+        weights = np.ones(n_samples) / n_samples
         
-        weights *= np.exp(-alpha * y_train * y_pred_train)
-        weights /= np.sum(weights)
-        
-        classifiers.append(clf)
-        alpha_values.append(alpha)
+        for _ in range(self.T):
+            clf = DecisionTreeClassifier(max_depth=self.max_depth)
+            clf.fit(X_train, y_train, sample_weight=weights)
+            y_pred_train = clf.predict(X_train)
+            err = np.sum(weights * (y_pred_train != y_train)) / np.sum(weights)
+            alpha = 0.5 * np.log((1 - err) / (err + 1e-10))
+            
+            weights *= np.exp(-alpha * y_train * y_pred_train)
+            weights /= np.sum(weights)
+            
+            self.classifiers.append(clf)
+            self.alpha_values.append(alpha)
+            self.depths.append(clf.get_depth())
     
-    def predict(X):
-        final_pred = sum(alpha * clf.predict(X) for alpha, clf in zip(alpha_values, classifiers))
+    def predict(self, X):
+        final_pred = sum(alpha * clf.predict(X) for alpha, clf in zip(self.alpha_values, self.classifiers))
         return np.sign(final_pred)
-    
-    y_train_pred = predict(X_train)
-    y_test_pred = predict(X_test)
-    
-    plot_roc_curve(y_test, y_test_pred, "AdaBoost")
-    return compute_metrics(y_train, y_train_pred), compute_metrics(y_test, y_test_pred)
 
-def adacost(X_train, y_train, X_test, y_test, T=50, cost=2.0):
-    n_samples = X_train.shape[0]
-    weights = np.ones(n_samples) / n_samples
-    classifiers = []
-    alpha_values = []
-    
-    for t in range(T):
-        clf = DecisionTreeClassifier(max_depth=5)
-        clf.fit(X_train, y_train, sample_weight=weights)
-        y_pred_train = clf.predict(X_train)
-        err = np.sum(weights * (y_pred_train != y_train)) / np.sum(weights)
-        alpha = 0.5 * np.log((1 - err) / (err + 1e-10))
+    def evaluate(self, X_test, y_test):
+        y_test_pred = self.predict(X_test)
+        return compute_metrics(y_test, y_test_pred)
+
+class AdaCost:
+    def __init__(self, T=50, max_depth=5, cost=1.0):
+        self.T = T
+        self.max_depth = max_depth
+        self.cost = cost
+        self.classifiers = []
+        self.alpha_values = []
+        self.depths = []
+
+    def train(self, X_train, y_train):
+        n_samples = X_train.shape[0]
+        weights = np.ones(n_samples) / n_samples
         
-        weight_update = np.exp(-alpha * y_train * y_pred_train)
-        weight_update[y_train == 1] **= cost  # Increase penalty for misclassified defective items
-        weights *= weight_update
-        weights /= np.sum(weights)
-        
-        classifiers.append(clf)
-        alpha_values.append(alpha)
+        for _ in range(self.T):
+            clf = DecisionTreeClassifier(max_depth=self.max_depth)
+            clf.fit(X_train, y_train, sample_weight=weights)
+            y_pred_train = clf.predict(X_train)
+            err = np.sum(weights * (y_pred_train != y_train)) / np.sum(weights)
+            alpha = 0.5 * np.log((1 - err) / (err + 1e-10))
+            
+            weight_update = np.exp(-alpha * y_train * y_pred_train)
+            weight_update[y_train == 1] **= self.cost
+            weights *= weight_update
+            weights /= np.sum(weights)
+            
+            self.classifiers.append(clf)
+            self.alpha_values.append(alpha)
+            self.depths.append(clf.get_depth())
     
-    def predict(X):
-        final_pred = sum(alpha * clf.predict(X) for alpha, clf in zip(alpha_values, classifiers))
+    def predict(self, X):
+        final_pred = sum(alpha * clf.predict(X) for alpha, clf in zip(self.alpha_values, self.classifiers))
         return np.sign(final_pred)
-    
-    y_train_pred = predict(X_train)
-    y_test_pred = predict(X_test)
-    
-    plot_roc_curve(y_test, y_test_pred, "AdaCost")
-    return compute_metrics(y_train, y_train_pred), compute_metrics(y_test, y_test_pred)
 
-def adaauc(X_train, y_train, X_test, y_test, T=50):
-    n_samples = X_train.shape[0]
-    weights = np.ones(n_samples) / n_samples
-    classifiers = []
-    alpha_values = []
+    def evaluate(self, X_test, y_test):
+        y_test_pred = self.predict(X_test)
+        return compute_metrics(y_test, y_test_pred)
+
+class AdaAUC:
+    def __init__(self, T=50, max_depth=5):
+        self.T = T
+        self.max_depth = max_depth
+        self.classifiers = []
+        self.alpha_values = []
+        self.depths = []
+
+    def train(self, X_train, y_train):
+        n_samples = X_train.shape[0]
+        weights = np.ones(n_samples) / n_samples
+        
+        for _ in range(self.T):
+            clf = DecisionTreeClassifier(max_depth=self.max_depth)
+            clf.fit(X_train, y_train, sample_weight=weights)
+            y_pred_train = clf.predict(X_train)
+            err = np.sum(weights * (y_pred_train != y_train)) / np.sum(weights)
+            alpha = 0.5 * np.log((1 - err) / (err + 1e-10))
+            auc_score = roc_auc_score(y_train, y_pred_train)
+            alpha *= (1 - auc_score)
+            
+            weights *= np.exp(-alpha * y_train * y_pred_train)
+            weights /= np.sum(weights)
+            
+            self.classifiers.append(clf)
+            self.alpha_values.append(alpha)
+            self.depths.append(clf.get_depth())
     
-    for t in range(T):
-        clf = DecisionTreeClassifier(max_depth=5)
-        clf.fit(X_train, y_train, sample_weight=weights)
-        y_pred_train = clf.predict(X_train)
-        err = np.sum(weights * (y_pred_train != y_train)) / np.sum(weights)
-        
-        alpha = 0.5 * np.log((1 - err) / (err + 1e-10))
-        auc_score = roc_auc_score(y_train, y_pred_train)
-        alpha *= (1 - auc_score)  # Modify alpha based on AUC
-        
-        weights *= np.exp(-alpha * y_train * y_pred_train)
-        weights /= np.sum(weights)
-        
-        classifiers.append(clf)
-        alpha_values.append(alpha)
-    
-    def predict(X):
-        final_pred = sum(alpha * clf.predict(X) for alpha, clf in zip(alpha_values, classifiers))
+    def predict(self, X):
+        final_pred = sum(alpha * clf.predict(X) for alpha, clf in zip(self.alpha_values, self.classifiers))
         return np.sign(final_pred)
-    
-    y_train_pred = predict(X_train)
-    y_test_pred = predict(X_test)
-    
-    plot_roc_curve(y_test, y_test_pred, "AdaAUC")
-    return compute_metrics(y_train, y_train_pred), compute_metrics(y_test, y_test_pred)
 
-# Load dataset
+    def evaluate(self, X_test, y_test):
+        y_test_pred = self.predict(X_test)
+        return compute_metrics(y_test, y_test_pred)
+
+# 데이터 불러오기
 X, y = load_data('battery.csv')
 X_train, X_test, y_train, y_test = stratified_split(X, y)
 
-# Train models
-plt.figure(figsize=(8, 6))
-adaboost_results = adaboost(X_train, y_train, X_test, y_test)
-adacost_results = adacost(X_train, y_train, X_test, y_test, cost=10.0)
-adaauc_results = adaauc(X_train, y_train, X_test, y_test)
-plt.legend()
-plt.xlabel("False Positive Rate")
-plt.ylabel("True Positive Rate")
-plt.title("ROC Curves for Boosting Algorithms")
+# 모델 생성 및 학습
+adaboost = AdaBoost()
+adaboost.train(X_train, y_train)
+
+adacost = AdaCost(cost=2.0)
+adacost.train(X_train, y_train)
+
+adaauc = AdaAUC()
+adaauc.train(X_train, y_train)
+
+# 평가
+adaboost_auc = adaboost.evaluate(X_test, y_test)
+adacost_auc = adacost.evaluate(X_test, y_test)
+adaauc_auc = adaauc.evaluate(X_test, y_test)
+
+# 그래프 출력
+fig, axes = plt.subplots(2, 1, figsize=(10, 12))
+ax1 = axes[0]
+ax2 = axes[1]
+
+plot_roc_curve(ax1, y_test, adaboost.predict(X_test), "AdaBoost")
+plot_roc_curve(ax1, y_test, adacost.predict(X_test), "AdaCost")
+plot_roc_curve(ax1, y_test, adaauc.predict(X_test), "AdaAUC")
+
+plot_depth_changes(ax2, adaboost.depths, "AdaBoost Depth")
+plot_depth_changes(ax2, adacost.depths, "AdaCost Depth")
+plot_depth_changes(ax2, adaauc.depths, "AdaAUC Depth")
+
 plt.show()
 
-# Display results
-print("AdaBoost Results (Train, Test):", adaboost_results)
-print("AdaCost Results (Train, Test):", adacost_results)
-print("AdaAUC Results (Train, Test):", adaauc_results)
+# 결과 출력
+print("AdaBoost AUC:", adaboost_auc)
+print("AdaCost AUC:", adacost_auc)
+print("AdaAUC AUC:", adaauc_auc)
