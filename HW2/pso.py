@@ -70,52 +70,52 @@ class PSO:
 
         return self.global_best_position, self.global_best_value, self.history, self.position_history
 
-# Example objective function
-def objective_function(x, y):
-    return x**2 + (y+1)**2 + 5*np.cos(1.5*x + 1.5) -3*np.cos(2*y - 1.5) 
+# Example usage
+if __name__ == "__main__":
+    # Example objective function
+    def objective_function(x, y):
+        return x**2 + (y+1)**2 + 5*np.cos(1.5*x + 1.5) -3*np.cos(2*y - 1.5) 
 
-# Visualize PSO optimization process
-def visualize_pso(position_history, bounds=[-10, 10], interval=10, objective_function=objective_function):
+    # Visualize PSO optimization process
+    def visualize_pso(position_history, bounds=[-10, 10], interval=10, objective_function=objective_function):
+        x = np.linspace(bounds[0], bounds[1], 200)
+        y = np.linspace(bounds[0], bounds[1], 200)
+        X, Y = np.meshgrid(x, y)
+        Z = objective_function(X, Y)
+
+        steps = list(range(0, len(position_history), interval))
+        num_rows = len(steps)
+
+        fig = plt.figure(figsize=(18, 8 * num_rows))
+
+        for i, idx in enumerate(steps):
+            positions = np.array(position_history[idx])
+
+            # 2D contour plot
+            ax2d = fig.add_subplot(num_rows, 2, 2 * i + 1)
+            ax2d.contourf(X, Y, Z, levels=50, cmap=cm.magma, alpha=0.7)
+            ax2d.scatter(positions[:, 0], positions[:, 1], c='black', s=20)
+            ax2d.set_title(f"Iteration {idx}")
+            ax2d.set_xlim(bounds)
+            ax2d.set_ylim(bounds)
+            ax2d.set_aspect('equal')
+
+            # 3D surface plot
+            ax3d = fig.add_subplot(num_rows, 2, 2 * i + 2, projection='3d')
+            ax3d.plot_surface(X, Y, Z, cmap=cm.magma, alpha=0.6, edgecolor='none')
+            ax3d.scatter(positions[:, 0], positions[:, 1],
+                        objective_function(positions[:, 0], positions[:, 1]),
+                        c='black', s=20)
+            ax3d.set_title(f"Iteration {idx}")
+            ax3d.set_xlim(bounds)
+            ax3d.set_ylim(bounds)
+            ax3d.set_zlim(np.min(Z), np.max(Z))
+
+        plt.subplots_adjust(wspace=0.3, hspace=0.5)
+        plt.show()
 
 
-    x = np.linspace(bounds[0], bounds[1], 200)
-    y = np.linspace(bounds[0], bounds[1], 200)
-    X, Y = np.meshgrid(x, y)
-    Z = objective_function(X, Y)
-
-    steps = list(range(0, len(position_history), interval))
-    num_rows = len(steps)
-
-    fig = plt.figure(figsize=(18, 8 * num_rows))
-
-    for i, idx in enumerate(steps):
-        positions = np.array(position_history[idx])
-
-        # 2D contour plot
-        ax2d = fig.add_subplot(num_rows, 2, 2 * i + 1)
-        ax2d.contourf(X, Y, Z, levels=50, cmap=cm.magma, alpha=0.7)
-        ax2d.scatter(positions[:, 0], positions[:, 1], c='black', s=20)
-        ax2d.set_title(f"Iteration {idx}")
-        ax2d.set_xlim(bounds)
-        ax2d.set_ylim(bounds)
-        ax2d.set_aspect('equal')
-
-        # 3D surface plot
-        ax3d = fig.add_subplot(num_rows, 2, 2 * i + 2, projection='3d')
-        ax3d.plot_surface(X, Y, Z, cmap=cm.magma, alpha=0.6, edgecolor='none')
-        ax3d.scatter(positions[:, 0], positions[:, 1],
-                     objective_function(positions[:, 0], positions[:, 1]),
-                     c='black', s=20)
-        ax3d.set_title(f"Iteration {idx}")
-        ax3d.set_xlim(bounds)
-        ax3d.set_ylim(bounds)
-        ax3d.set_zlim(np.min(Z), np.max(Z))
-
-    plt.subplots_adjust(wspace=0.3, hspace=0.5)
-    plt.show()
-
-
-# Run visualization
-pso = PSO(objective_function, bounds=[-10, 10], max_iter=30, use_adaptive=True)
-best_pos, best_val, history, pos_history = pso.optimize()
-visualize_pso(pos_history, bounds=[-10, 10], interval=5, objective_function=objective_function)
+    # Run visualization
+    pso = PSO(objective_function, bounds=[-10, 10], max_iter=30, use_adaptive=True)
+    best_pos, best_val, history, pos_history = pso.optimize()
+    visualize_pso(pos_history, bounds=[-10, 10], interval=5, objective_function=objective_function)
