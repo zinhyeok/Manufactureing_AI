@@ -35,11 +35,14 @@ class GaussianProcess:
         K_inv = np.linalg.inv(K)
 
         term1 = -0.5 * self.y_train.T @ K_inv @ self.y_train
-        term2 = -0.5 * np.log(np.linalg.det(K))
+        # term2 = -0.5 * np.log(np.linalg.det(K))
+        L = np.linalg.cholesky(K)
+        term2 = -np.sum(np.log(np.diagonal(L))) * 2
         term3 = -0.5 * len(self.y_train) * np.log(2 * np.pi)
 
         return -(term1 + term2 + term3)
 
+#kernel hyperparameters optimization
     def optimize_hyperparameters(self, bounds):
         res = minimize(
             fun=self.log_marginal_likelihood,
@@ -49,6 +52,7 @@ class GaussianProcess:
         )
         l_opt, sigma_f_opt = res.x
         self.kernel = lambda X1, X2: self.squared_exponential_kernel(X1, X2, l_opt, sigma_f_opt)
+        self.fit(self.X_train, self.y_train) # Refit with optimized hyperparameters
 
     @staticmethod
     def squared_exponential_kernel(X1, X2, l=1.0, sigma_f=1.0):
@@ -63,16 +67,17 @@ if __name__ == "__main__":
     y_train = data['Y'].values
 
     # Define test points for surface prediction
-    x1 = np.linspace(-2, 2, 50)
-    x2 = np.linspace(-2, 2, 50)
+    # Create a grid of points for prediction(for 0-1 range in 2D similar to the train data)
+    x1 = np.linspace(0, 1, 50)
+    x2 = np.linspace(0, 1, 50)
     X1, X2 = np.meshgrid(x1, x2)
     X_test = np.c_[X1.ravel(), X2.ravel()]
 
     # Initialize and train GP
     gp = GaussianProcess(kernel=lambda X1, X2: GaussianProcess.squared_exponential_kernel(X1, X2))
     gp.fit(X_train, y_train)
-    gp.optimize_hyperparameters(bounds=((1e-2, 10.0), (1e-2, 10.0)))
-
+    gp.optimize_hyperparameters(bounds=((1e-2, 10.0), (1e-2, 10.0))) # Optimize hyperparameters + refit
+    
     # Make predictions
     mu, cov = gp.predict(X_test)
     mu = mu.reshape(X1.shape)
