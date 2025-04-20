@@ -5,7 +5,7 @@ from gp import GaussianProcess
 from scipy.stats import norm
 from scipy.optimize import minimize
 from sklearn.preprocessing import StandardScaler
-
+import matplotlib.pyplot as plt
 # Load dataset
 df = pd.read_csv("coating_sampled.csv")
 
@@ -87,6 +87,31 @@ for i in range(1, len(transition_indices)):
             'predicted_weight': y_new
         })
 
-# Save results
-pd.DataFrame(bo_results).to_csv("bo_results_topside.csv", index=False)
-print("BO completed and saved to bo_results_topside.csv.")
+# visualize results
+
+bo_df = pd.DataFrame(bo_results)
+
+for coil in bo_df['coil'].unique():
+    subset = bo_df[bo_df['coil'] == coil]
+
+    fig, axs = plt.subplots(1, 2, figsize=(12, 5))
+
+    # GAP
+    axs[0].plot(subset['iter'], subset["gap_top"], label="BO Gap", marker='x')
+    axs[0].set_title(f"Gap (Top-side) - {coil}")
+    axs[0].set_xlabel("Iteration")
+    axs[0].set_ylabel("Gap Value")
+    axs[0].legend()
+    axs[0].grid(True)
+
+    # PRESSURE
+    axs[1].plot(subset['iter'], subset["pressure_top"], label="BO Pressure", marker='x')
+    axs[1].set_title(f"Pressure (Top-side) - {coil}")
+    axs[1].set_xlabel("Iteration")
+    axs[1].set_ylabel("Pressure Value")
+    axs[1].legend()
+    axs[1].grid(True)
+
+    plt.suptitle(f"Top-side BO Control Variables - Coil {coil}", fontsize=14)
+    plt.tight_layout()
+    plt.show()
