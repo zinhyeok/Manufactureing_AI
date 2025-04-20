@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
 class GaussianProcess:
-    def __init__(self, kernel, noise=1e-10):
+    def __init__(self, kernel, noise=1e-3):
         self.kernel = kernel
         self.noise = noise
         self.X_train = None
@@ -46,7 +46,7 @@ class GaussianProcess:
     def optimize_hyperparameters(self, bounds):
         res = minimize(
             fun=self.log_marginal_likelihood,
-            x0=[1.0, 1.0],
+            x0=[0.5, 0.5],
             bounds=bounds,
             method='L-BFGS-B'
         )

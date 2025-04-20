@@ -7,8 +7,12 @@ from scipy.optimize import minimize
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import GradientBoostingRegressor  # GB import
+from pso import PSO  # PSO 클래스를 import
+
 # Load the dataset
 df = pd.read_csv("coating_sampled.csv")
+
 #data 구성
 #input: thickness, width, speed, tension, gap, pressure, angle
 #conntrol variable: gap, pressure
@@ -35,12 +39,12 @@ scaler = StandardScaler()
 X_train = scaler.fit_transform(X_train)
 X_test = scaler.transform(X_test)
 
-# MLP 모델 학습
-mlp_top = MLPRegressor(hidden_layer_sizes=(50, 50), activation='relu', max_iter=1000, random_state=42)
-mlp_top.fit(X_train, y_train)
+# ✅ Gradient Boosting 모델로 변경
+gbr_top = GradientBoostingRegressor(n_estimators=200, learning_rate=0.05, max_depth=4, random_state=42)
+gbr_top.fit(X_train, y_train)
 
 # 3. 예측 및 평가
-y_pred = mlp_top.predict(X_test)
+y_pred = gbr_top.predict(X_test)
 r2 = r2_score(y_test, y_pred)
 mse = mean_squared_error(y_test, y_pred)
 
@@ -70,7 +74,7 @@ target_weights_top = subset_top['weight_top'].values
 true_gaps_top = subset_top['gap_top'].values
 true_pressures_top = subset_top['pressure_top'].values
 
-# BFGS 최적화 루프
+# ✅ PSO 최적화 변경
 optimized_gaps_top = []
 optimized_pressures_top = []
 predicted_weights_top = []
@@ -79,17 +83,20 @@ for i in range(len(subset_top)):
     env_input = env_values_top[i]
     target = target_weights_top[i]
 
-    def objective(x):
-        full_input_raw = np.concatenate([env_input, x])
-        pred = mlp_top.predict(full_input_raw.reshape(1, -1))
+    # 목적 함수 정의
+    def objective_function(x, y):
+        full_input = np.concatenate([env_input, [x, y]])
+        pred = gbr_top.predict(full_input.reshape(1, -1))
         return (pred[0] - target) ** 2
 
-    x0 = np.array([9.0, 0.27])
-    result = minimize(objective, x0, method='BFGS')
-
-    optimized_gaps_top.append(result.x[0])
-    optimized_pressures_top.append(result.x[1])
-    predicted_weights_top.append(mlp_top.predict(np.concatenate([env_input, result.x]).reshape(1, -1))[0])
+    # PSO 최적화 수행
+    pso = PSO(objective_function, bounds=[(6.0, 12.0), (0.2, 0.35)], max_iter=50, use_adaptive=True)
+    best_pos, best_val, _, _ = pso.optimize()
+    
+    optimized_gaps_top.append(best_pos[0])
+    optimized_pressures_top.append(best_pos[1])
+    full_input = np.concatenate([env_input, best_pos])
+    predicted_weights_top.append(gbr_top.predict(full_input.reshape(1, -1))[0])
 
 # 결과 정리
 opt_df_top = pd.DataFrame({
@@ -141,11 +148,11 @@ scaler_bot = StandardScaler()
 Xb_scaled = scaler_bot.fit_transform(Xb)
 Xb_train, Xb_test, yb_train, yb_test = train_test_split(Xb_scaled, yb, test_size=0.2, random_state=42)
 
-# 3. MLP 모델 학습
-mlp_bot = MLPRegressor(hidden_layer_sizes=(50, 50), activation='relu', max_iter=1000, random_state=42)
-mlp_bot.fit(Xb_train, yb_train)
+# ✅ Gradient Boosting 모델로 변경
+gbr_bot = GradientBoostingRegressor(n_estimators=200, learning_rate=0.05, max_depth=4, random_state=42)
+gbr_bot.fit(Xb_train, yb_train)
 
-yb_pred = mlp_bot.predict(Xb_test)
+yb_pred = gbr_bot.predict(Xb_test)
 r2 = r2_score(yb_test, yb_pred)
 mse = mean_squared_error(yb_test, yb_pred)
 
@@ -184,17 +191,20 @@ for i in range(len(subset_bot)):
     env_input = env_values_bot[i]
     target = target_weights_bot[i]
 
-    def objective(x):
-        full_input_raw = np.concatenate([env_input, x])
-        pred = mlp_bot.predict(full_input_raw.reshape(1, -1))
+    # 목적 함수 정의
+    def objective_function(x, y):
+        full_input = np.concatenate([env_input, [x, y]])
+        pred = gbr_bot.predict(full_input.reshape(1, -1))
         return (pred[0] - target) ** 2
 
-    x0 = np.array([9.0, 0.27])
-    result = minimize(objective, x0, method='BFGS')
+    # PSO 실행
+    pso = PSO(objective_function, bounds=[(6.0, 12.0), (0.2, 0.35)], max_iter=50, use_adaptive=True)
+    best_pos, best_val, _, _ = pso.optimize()
 
-    optimized_gaps_bot.append(result.x[0])
-    optimized_pressures_bot.append(result.x[1])
-    predicted_weights_bot.append(mlp_bot.predict(np.concatenate([env_input, result.x]).reshape(1, -1))[0])
+    optimized_gaps_bot.append(best_pos[0])
+    optimized_pressures_bot.append(best_pos[1])
+    full_input = np.concatenate([env_input, best_pos])
+    predicted_weights_bot.append(gbr_bot.predict(full_input.reshape(1, -1))[0])
 
 # 결과 정리
 opt_df_bot = pd.DataFrame({

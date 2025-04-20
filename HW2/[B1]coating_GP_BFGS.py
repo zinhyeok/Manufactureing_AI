@@ -36,9 +36,9 @@ X_train = scaler.fit_transform(X_train)
 X_test = scaler.transform(X_test)
 
 # GP 모델 학습
-gp = GaussianProcess(kernel=lambda X1, X2: GaussianProcess.squared_exponential_kernel(X1, X2))
+gp = GaussianProcess(kernel=lambda X1, X2: GaussianProcess.squared_exponential_kernel(X1, X2), noise=1e-2)
 gp.fit(X_train, y_train)
-gp.optimize_hyperparameters(bounds=((1e-2, 10.0), (1e-2, 10.0))) # Optimize hyperparameters + refit
+gp.optimize_hyperparameters(bounds=((1e-3, 100.0), (1e-3, 100.0))) # Optimize hyperparameters + refit
 
 # 3. 예측 및 평가
 y_pred, cov = gp.predict(X_test)
@@ -62,9 +62,11 @@ plt.show()
 r2, mse
 
 # FIXME: r2 -9.35, mse = 2222 나옴
+# => GP 모델의 noise를 1e-5에서 1e-2로 변경하여 noise를 증가, 기존 kernel의 초기 hyperparameter를 l을 1.0에서 0.5로, sigma_f의 탐색범위를 100으로 늘림 
+# l의 변경이 유효함r2 0.97로 개선
 
 #Step 2: Finding optimal control variables (gap, pressure) for top-side model
-# 1. coil == CRG2188 앞 16개 추출 (bot용)
+# 1. coil == CRG2188 앞 16개 추출 (top)
 subset_top = df[df['coil'].str.strip() == 'CRG2188'].head(16)
 
 # 환경 변수 추출 및 정규화 (top 기준)
@@ -87,15 +89,18 @@ for i in range(len(subset_top)):
 
     def objective(x):
         full_input_raw = np.concatenate([env_input, x])
-        pred = mlp_top.predict(full_input_raw.reshape(1, -1))
-        return (pred[0] - target) ** 2
+        mu, _ = gp.predict(full_input_raw.reshape(1, -1))  # predict returns (mu, cov)
+        return (mu[0] - target) ** 2
 
     x0 = np.array([9.0, 0.27])
     result = minimize(objective, x0, method='BFGS')
 
-    optimized_gaps_top.append(result.x[0])
-    optimized_pressures_top.append(result.x[1])
-    predicted_weights_top.append(mlp_top.predict(np.concatenate([env_input, result.x]).reshape(1, -1))[0])
+    x_opt = result.x
+    optimized_gaps_top.append(x_opt[0])
+    optimized_pressures_top.append(x_opt[1])
+
+    mu_pred, _ = gp.predict(np.concatenate([env_input, x_opt]).reshape(1, -1))
+    predicted_weights_top.append(mu_pred[0])
 
 # 결과 정리
 opt_df_top = pd.DataFrame({
@@ -147,28 +152,34 @@ scaler_bot = StandardScaler()
 Xb_scaled = scaler_bot.fit_transform(Xb)
 Xb_train, Xb_test, yb_train, yb_test = train_test_split(Xb_scaled, yb, test_size=0.2, random_state=42)
 
-# 3. MLP 모델 학습
-mlp_bot = MLPRegressor(hidden_layer_sizes=(50, 50), activation='relu', max_iter=1000, random_state=42)
-mlp_bot.fit(Xb_train, yb_train)
+# ✅ Gaussian Process 모델 학습
+gp_bot = GaussianProcess(kernel=lambda X1, X2: GaussianProcess.squared_exponential_kernel(X1, X2), noise=1e-2)
+gp_bot.fit(Xb_train, yb_train)
+gp_bot.optimize_hyperparameters(bounds=((1e-3, 100.0), (1e-3, 100.0))) # Optimize hyperparameters + refit
 
-yb_pred = mlp_bot.predict(Xb_test)
+yb_pred, cov_bot = gp_bot.predict(Xb_test)
+std_bot = np.sqrt(np.diag(cov_bot))
+
 r2 = r2_score(yb_test, yb_pred)
 mse = mean_squared_error(yb_test, yb_pred)
 
+
 # 시각화용 데이터 정리
 plt.figure(figsize=(6, 6))
-plt.scatter(yb_test, yb_pred, alpha=0.7)
-plt.plot([min(yb_test), max(yb_test)], [min(yb_train), max(yb_test)], color='red', linestyle='--')
+plt.errorbar(yb_test, yb_pred, yerr=2 * std_bot, fmt='o', alpha=0.6, label='Prediction ± 2σ')
+plt.plot([min(yb_test), max(yb_test)], [min(yb_test), max(yb_test)], color='red', linestyle='--', label='Perfect prediction')
 plt.xlabel("Actual weight_bot")
-plt.ylabel("Predicted weight_bot")
-plt.title(f"Prediction vs Actual (Bot) | R² = {r2:.3f}")
+plt.ylabel("Predicted weight_bot (GP)")
+plt.title(f"Prediction vs Actual (bot) | R² = {r2:.3f}")
 plt.grid(True)
+plt.legend()
 plt.tight_layout()
 plt.show()
 
 r2, mse
 
 # Step 2: Finding optimal control variables (gap, pressure) for bottom-side model
+
 # 1. coil == CRG2188 앞 16개 추출 (bot용)
 subset_bot = df[df['coil'].str.strip() == 'CRG2188'].head(16)
 
@@ -192,15 +203,18 @@ for i in range(len(subset_bot)):
 
     def objective(x):
         full_input_raw = np.concatenate([env_input, x])
-        pred = mlp_bot.predict(full_input_raw.reshape(1, -1))
-        return (pred[0] - target) ** 2
+        mu, _ = gp_bot.predict(full_input_raw.reshape(1, -1))
+        return (mu[0] - target) ** 2
 
     x0 = np.array([9.0, 0.27])
     result = minimize(objective, x0, method='BFGS')
 
-    optimized_gaps_bot.append(result.x[0])
-    optimized_pressures_bot.append(result.x[1])
-    predicted_weights_bot.append(mlp_bot.predict(np.concatenate([env_input, result.x]).reshape(1, -1))[0])
+    x_opt = result.x
+    optimized_gaps_bot.append(x_opt[0])
+    optimized_pressures_bot.append(x_opt[1])
+
+    mu_pred, _ = gp_bot.predict(np.concatenate([env_input, x_opt]).reshape(1, -1))
+    predicted_weights_bot.append(mu_pred[0])
 
 # 결과 정리
 opt_df_bot = pd.DataFrame({

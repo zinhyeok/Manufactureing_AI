@@ -1,14 +1,22 @@
 from sklearn.model_selection import train_test_split
+from sklearn.neural_network import MLPRegressor
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.preprocessing import StandardScaler
 from scipy.optimize import minimize
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-# import GaussianProcess from gp.py
 from gp import GaussianProcess
-# import pso algorithm from pso.py
-from pso import PSO
+from pso import PSO  
+# Load the dataset
+df = pd.read_csv("coating_sampled.csv")
+#data 구성
+#input: thickness, width, speed, tension, gap, pressure, angle
+#conntrol variable: gap, pressure
+#ouput: weight
+#steel has two sides: top and bottom -> 2 outputs and model neeeds, and gap, pressure, angle hasw top, bot
+# Step1: weight prediction using input variables
+# Step2: find optimal control variable which min diff of weight, assume that gap and pressure values are unknown?
 
 # === Top-side prediction and optimization ===
 # Step 1: Predicting weight using input variables
@@ -27,30 +35,38 @@ scaler = StandardScaler()
 X_train = scaler.fit_transform(X_train)
 X_test = scaler.transform(X_test)
 
-# MLP 모델 학습
-mlp_top = MLPRegressor(hidden_layer_sizes=(50, 50), activation='relu', max_iter=1000, random_state=42)
-mlp_top.fit(X_train, y_train)
+# GP 모델 학습
+gp = GaussianProcess(kernel=lambda X1, X2: GaussianProcess.squared_exponential_kernel(X1, X2), noise=1e-2)
+gp.fit(X_train, y_train)
+gp.optimize_hyperparameters(bounds=((1e-3, 100.0), (1e-3, 100.0))) # Optimize hyperparameters + refit
 
 # 3. 예측 및 평가
-y_pred = mlp_top.predict(X_test)
+y_pred, cov = gp.predict(X_test)
+std = np.sqrt(np.diag(cov))
+
 r2 = r2_score(y_test, y_pred)
 mse = mean_squared_error(y_test, y_pred)
 
 # 시각화용 데이터 정리
 plt.figure(figsize=(6, 6))
-plt.scatter(y_test, y_pred, alpha=0.7)
-plt.plot([min(y_test), max(y_test)], [min(y_test), max(y_test)], color='red', linestyle='--')
+plt.errorbar(y_test, y_pred, yerr=2 * std, fmt='o', alpha=0.6, label='Prediction ± 2σ')
+plt.plot([min(y_test), max(y_test)], [min(y_test), max(y_test)], color='red', linestyle='--', label='Perfect prediction')
 plt.xlabel("Actual weight_top")
-plt.ylabel("Predicted weight_top")
+plt.ylabel("Predicted weight_top (GP)")
 plt.title(f"Prediction vs Actual (Top) | R² = {r2:.3f}")
 plt.grid(True)
+plt.legend()
 plt.tight_layout()
 plt.show()
 
 r2, mse
 
+# FIXME: r2 -9.35, mse = 2222 나옴
+# => GP 모델의 noise를 1e-5에서 1e-2로 변경하여 noise를 증가, 기존 kernel의 초기 hyperparameter를 l을 1.0에서 0.5로, sigma_f의 탐색범위를 100으로 늘림 
+# l의 변경이 유효함r2 0.97로 개선
+
 #Step 2: Finding optimal control variables (gap, pressure) for top-side model
-# 1. coil == CRG2188 앞 16개 추출 (bot용)
+# 1. coil == CRG2188 앞 16개 추출 (top)
 subset_top = df[df['coil'].str.strip() == 'CRG2188'].head(16)
 
 # 환경 변수 추출 및 정규화 (top 기준)
@@ -62,26 +78,39 @@ target_weights_top = subset_top['weight_top'].values
 true_gaps_top = subset_top['gap_top'].values
 true_pressures_top = subset_top['pressure_top'].values
 
-# BFGS 최적화 루프
+# ✅ PSO 최적화 변경
+subset_top = df[df['coil'].str.strip() == 'CRG2188'].head(16)
+env_features_top = ['thickness', 'width', 'speed', 'tension', 'angle_top']
+env_values_top = scaler.transform(subset_top[features_top].values)[:, :len(env_features_top)]
+
+target_weights_top = subset_top['weight_top'].values
+
 optimized_gaps_top = []
 optimized_pressures_top = []
 predicted_weights_top = []
+
+bounds = [(5.0, 13.0), (0.2, 0.35)]  # practical bounds for gap and pressure
 
 for i in range(len(subset_top)):
     env_input = env_values_top[i]
     target = target_weights_top[i]
 
-    def objective(x):
-        full_input_raw = np.concatenate([env_input, x])
-        pred = mlp_top.predict(full_input_raw.reshape(1, -1))
-        return (pred[0] - target) ** 2
+    def objective(x, env=env_input, target=target):
+        full_input = np.concatenate([env, x])
+        mu, _ = gp.predict(full_input.reshape(1, -1))
+        return (mu[0] - target) ** 2
 
-    x0 = np.array([9.0, 0.27])
-    result = minimize(objective, x0, method='BFGS')
+    # PSO expects a function of two variables (x[0], x[1])
+    wrapped_objective = lambda x1, x2: objective(np.array([x1, x2]))
 
-    optimized_gaps_top.append(result.x[0])
-    optimized_pressures_top.append(result.x[1])
-    predicted_weights_top.append(mlp_top.predict(np.concatenate([env_input, result.x]).reshape(1, -1))[0])
+    pso = PSO(wrapped_objective, bounds=np.array(bounds).T, max_iter=50, num_particles=30)
+    best_pos, best_val, _, _ = pso.optimize()
+
+    optimized_gaps_top.append(best_pos[0])
+    optimized_pressures_top.append(best_pos[1])
+
+    mu_pred, _ = gp.predict(np.concatenate([env_input, best_pos]).reshape(1, -1))
+    predicted_weights_top.append(mu_pred[0])
 
 # 결과 정리
 opt_df_top = pd.DataFrame({
@@ -133,28 +162,34 @@ scaler_bot = StandardScaler()
 Xb_scaled = scaler_bot.fit_transform(Xb)
 Xb_train, Xb_test, yb_train, yb_test = train_test_split(Xb_scaled, yb, test_size=0.2, random_state=42)
 
-# 3. MLP 모델 학습
-mlp_bot = MLPRegressor(hidden_layer_sizes=(50, 50), activation='relu', max_iter=1000, random_state=42)
-mlp_bot.fit(Xb_train, yb_train)
+# ✅ Gaussian Process 모델 학습
+gp_bot = GaussianProcess(kernel=lambda X1, X2: GaussianProcess.squared_exponential_kernel(X1, X2), noise=1e-2)
+gp_bot.fit(Xb_train, yb_train)
+gp_bot.optimize_hyperparameters(bounds=((1e-3, 100.0), (1e-3, 100.0))) # Optimize hyperparameters + refit
 
-yb_pred = mlp_bot.predict(Xb_test)
+yb_pred, cov_bot = gp_bot.predict(Xb_test)
+std_bot = np.sqrt(np.diag(cov_bot))
+
 r2 = r2_score(yb_test, yb_pred)
 mse = mean_squared_error(yb_test, yb_pred)
 
+
 # 시각화용 데이터 정리
 plt.figure(figsize=(6, 6))
-plt.scatter(yb_test, yb_pred, alpha=0.7)
-plt.plot([min(yb_test), max(yb_test)], [min(yb_train), max(yb_test)], color='red', linestyle='--')
+plt.errorbar(yb_test, yb_pred, yerr=2 * std_bot, fmt='o', alpha=0.6, label='Prediction ± 2σ')
+plt.plot([min(yb_test), max(yb_test)], [min(yb_test), max(yb_test)], color='red', linestyle='--', label='Perfect prediction')
 plt.xlabel("Actual weight_bot")
-plt.ylabel("Predicted weight_bot")
-plt.title(f"Prediction vs Actual (Bot) | R² = {r2:.3f}")
+plt.ylabel("Predicted weight_bot (GP)")
+plt.title(f"Prediction vs Actual (bot) | R² = {r2:.3f}")
 plt.grid(True)
+plt.legend()
 plt.tight_layout()
 plt.show()
 
 r2, mse
 
 # Step 2: Finding optimal control variables (gap, pressure) for bottom-side model
+
 # 1. coil == CRG2188 앞 16개 추출 (bot용)
 subset_bot = df[df['coil'].str.strip() == 'CRG2188'].head(16)
 
@@ -167,7 +202,7 @@ target_weights_bot = subset_bot['weight_bot'].values
 true_gaps_bot = subset_bot['gap_bot'].values
 true_pressures_bot = subset_bot['pressure_bot'].values
 
-# BFGS 최적화 루프
+# ✅ PSO 최적화 변경
 optimized_gaps_bot = []
 optimized_pressures_bot = []
 predicted_weights_bot = []
@@ -176,17 +211,21 @@ for i in range(len(subset_bot)):
     env_input = env_values_bot[i]
     target = target_weights_bot[i]
 
-    def objective(x):
-        full_input_raw = np.concatenate([env_input, x])
-        pred = mlp_bot.predict(full_input_raw.reshape(1, -1))
-        return (pred[0] - target) ** 2
+    def objective(x, env=env_input, target=target):
+        full_input = np.concatenate([env, x])
+        mu, _ = gp_bot.predict(full_input.reshape(1, -1))
+        return (mu[0] - target) ** 2
 
-    x0 = np.array([9.0, 0.27])
-    result = minimize(objective, x0, method='BFGS')
+    wrapped_objective = lambda x1, x2: objective(np.array([x1, x2]))
 
-    optimized_gaps_bot.append(result.x[0])
-    optimized_pressures_bot.append(result.x[1])
-    predicted_weights_bot.append(mlp_bot.predict(np.concatenate([env_input, result.x]).reshape(1, -1))[0])
+    pso = PSO(wrapped_objective, bounds=np.array(bounds).T, max_iter=50, num_particles=30)
+    best_pos, best_val, _, _ = pso.optimize()
+
+    optimized_gaps_bot.append(best_pos[0])
+    optimized_pressures_bot.append(best_pos[1])
+
+    mu_pred, _ = gp_bot.predict(np.concatenate([env_input, best_pos]).reshape(1, -1))
+    predicted_weights_bot.append(mu_pred[0])
 
 # 결과 정리
 opt_df_bot = pd.DataFrame({
