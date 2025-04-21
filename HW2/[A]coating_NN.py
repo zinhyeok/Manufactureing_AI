@@ -23,7 +23,7 @@ import pandas as pd
 # === Top-side prediction and optimization ===
 # Step 1: Predicting weight using input variables
 # 1. 데이터 분할 (Top-side 모델 학습용)
-features_top = ['thickness', 'width', 'speed', 'tension', 'gap_top', 'pressure_top', 'angle_top']
+features_top = ['thickness', 'width', 'speed', 'tension', 'gap_top', 'pressure_top']
 target_top = 'weight_top'
 
 X = df[features_top].values
@@ -60,15 +60,17 @@ plt.show()
 r2, mse
 
 #Step 2: Finding optimal control variables (gap, pressure) for top-side model
+#최적화 문제 주의: target weight 이용, gap, pressure는 최적화
+
 # 1. coil == CRG2188 앞 16개 추출 (bot용)
 subset_top = df[df['coil'].str.strip() == 'CRG2188'].head(16)
 
 # 환경 변수 추출 및 정규화 (top 기준)
-env_features_top = ['thickness', 'width', 'speed', 'tension', 'angle_top']
+env_features_top = ['thickness', 'width', 'speed', 'tension']
 env_values_top = scaler.transform(subset_top[features_top].values)[:, :len(env_features_top)]
 
 # 목표값 및 실제 제어 변수
-target_weights_top = subset_top['weight_top'].values
+target_weights_top = subset_top['target'].values
 true_gaps_top = subset_top['gap_top'].values
 true_pressures_top = subset_top['pressure_top'].values
 
@@ -132,7 +134,7 @@ plt.show()
 
 # Step 1: Predicting weight using input variables (Bottom-side model)
 # 1. 변수 설정
-features_bot = ['thickness', 'width', 'speed', 'tension', 'gap_bot', 'pressure_bot', 'angle_bot']
+features_bot = ['thickness', 'width', 'speed', 'tension', 'gap_bot', 'pressure_bot']
 target_bot = 'weight_bot'
 
 Xb = df[features_bot].values
@@ -169,11 +171,11 @@ r2, mse
 subset_bot = df[df['coil'].str.strip() == 'CRG2188'].head(16)
 
 # 환경 변수 추출 및 정규화 (bot 기준)
-env_features_bot = ['thickness', 'width', 'speed', 'tension', 'angle_bot']
+env_features_bot = ['thickness', 'width', 'speed', 'tension']
 env_values_bot = scaler_bot.transform(subset_bot[features_bot].values)[:, :len(env_features_bot)]
 
 # 목표값 및 실제 제어 변수
-target_weights_bot = subset_bot['weight_bot'].values
+target_weights_bot = subset_bot['target'].values
 true_gaps_bot = subset_bot['gap_bot'].values
 true_pressures_bot = subset_bot['pressure_bot'].values
 

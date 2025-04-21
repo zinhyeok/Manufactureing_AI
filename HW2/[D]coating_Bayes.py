@@ -1,117 +1,89 @@
-
-import pandas as pd
 import numpy as np
-from gp import GaussianProcess
+import pandas as pd
 from scipy.stats import norm
-from scipy.optimize import minimize
-from sklearn.preprocessing import StandardScaler
+from gp import GaussianProcess  
 import matplotlib.pyplot as plt
-# Load dataset
+#online 상황가정
+# Regression with Gaussian Process (GP) for Bayesian Optimization (BO)
+# Data가 코일별로 다르다는점에 유의할것 
+
+# 1. 데이터 로딩 및 초기 설정
 df = pd.read_csv("coating_sampled.csv")
+coil_names = df["coil"].unique()
+new_coil_name = coil_names[1]  # CRG2188 이후의 새 coil
+new_coil_df = df[df["coil"] == new_coil_name].reset_index(drop=True)
+#' CRG1588'
 
-# Feature definitions
-features_top = ['thickness', 'width', 'speed', 'tension', 'gap_top', 'pressure_top', 'angle_top']
-env_features = ['thickness', 'width', 'speed', 'tension', 'angle_top']
-control_features = ['gap_top', 'pressure_top']
-target_col = 'weight_top'
 
-# Detect coil transitions
-coil_changes = df['coil'].astype(str).str.strip()
-change_points = coil_changes.ne(coil_changes.shift()).cumsum()
-coil_transitions = coil_changes.groupby(change_points).first().reset_index(drop=True)
-transition_indices = coil_changes.ne(coil_changes.shift()).to_numpy().nonzero()[0]
+# 2. Search Space 설정
+init_N = 5
+init_data = new_coil_df.iloc[:init_N]
 
-# Expected Improvement acquisition function
-def expected_improvement(X_candidate, gp_model, y_best):
-    mu, cov = gp_model.predict(X_candidate)
-    sigma = np.sqrt(np.diag(cov))
-    sigma = np.maximum(sigma, 1e-6)
-    Z = (y_best - mu) / sigma
-    ei = (y_best - mu) * norm.cdf(Z) + sigma * norm.pdf(Z)
+
+X_env_init = init_data[["thickness", "width", "speed", "tension", "angle_top"]].values
+X_ctrl_init = init_data[["gap_top", "pressure_top"]].values
+X_train = np.concatenate([X_env_init, X_ctrl_init], axis=1)
+y_train = init_data["weight_top"].values
+y_target = y_train['target'].values
+
+# 2. EI 정의
+def expected_improvement(x_ctrl, x_env_fixed, gp, y_target, y_best):
+    x_input = np.concatenate([x_env_fixed.reshape(1, -1), x_ctrl.reshape(1, -1)], axis=1)
+    mu, cov = gp.predict(x_input)
+    mu = mu[0]
+    sigma = np.sqrt(cov[0, 0]) if cov.ndim > 1 else np.sqrt(cov)
+    loss_mu = abs(mu - y_target)
+    z = (y_best - loss_mu) / sigma if sigma > 1e-6 else 0
+    ei = (y_best - loss_mu) * norm.cdf(z) + sigma * norm.pdf(z)
     return ei
 
-# BO results
-bo_results = []
+# 3. Acquisition Function 최대화 (Grid Search)
+def suggest_next(gp, x_env_fixed, y_target, y_best):
+    gap_grid = np.linspace(0.5, 2.5, 30)
+    pressure_grid = np.linspace(0.5, 2.5, 30)
+    best_ei = -np.inf
+    best_x = None
+    for g in gap_grid:
+        for p in pressure_grid:
+            ei = expected_improvement(np.array([g, p]), x_env_fixed, gp, y_target, y_best)
+            if ei > best_ei:
+                best_ei = ei
+                best_x = np.array([g, p])
+    return best_x
 
-# Iterate over each transition
-for i in range(1, len(transition_indices)):
-    prev_start = transition_indices[i-1]
-    prev_end = transition_indices[i]
-    new_start = transition_indices[i]
-    new_end = transition_indices[i+1] if i+1 < len(transition_indices) else len(df)
+# 4. BO Loop
+BO_iter = 5
+gp = GaussianProcess(kernel=lambda X1, X2: GaussianProcess.squared_exponential_kernel(X1, X2))
 
-    prev_data = df.iloc[prev_start:prev_end]
-    new_data = df.iloc[new_start:new_end]
-    init_data = new_data.head(5)
+for t in range(init_N, init_N + BO_iter):
+    x_env_t = new_coil_df.iloc[t - 1][["thickness", "width", "speed", "tension", "angle_top"]].values
 
-    # GP training data
-    X_env_prev = prev_data[env_features].values
-    X_ctrl_prev = prev_data[control_features].values
-    y_prev = prev_data[target_col].values
-
-    scaler = StandardScaler()
-    X_env_scaled_prev = scaler.fit_transform(X_env_prev)
-    X_train = np.hstack([X_env_scaled_prev, X_ctrl_prev])
-    y_train = y_prev
-
-    # Train GP
-    gp = GaussianProcess(kernel=lambda X1, X2: GaussianProcess.squared_exponential_kernel(X1, X2), noise=1e-2)
     gp.fit(X_train, y_train)
-    gp.optimize_hyperparameters(bounds=((1e-3, 100.0), (1e-3, 100.0)))
+    gp.optimize_hyperparameters(bounds=((1e-2, 10.0), (1e-2, 10.0)))
 
-    # Use fixed env value from latest of init_data
-    X_env_fixed = scaler.transform(init_data[env_features].values)[-1]
+    y_preds, _ = gp.predict(X_train)
+    best_loss = np.min(np.abs(y_preds - y_target))
 
-    for t in range(5):
-        def acq_neg(x):
-            x = np.array(x).reshape(1, -1)
-            x_full = np.hstack([X_env_fixed.reshape(1, -1), x])
-            return -expected_improvement(x_full, gp, y_train.min())[0]
+    x_next_ctrl = suggest_next(gp, x_env_t, y_target, best_loss)
+    x_next_full = np.concatenate([x_env_t, x_next_ctrl])
 
-        res = minimize(acq_neg, x0=np.array([9.0, 0.27]), bounds=[(5, 13), (0.2, 0.35)])
-        best_x = res.x
-        x_new_full = np.hstack([X_env_fixed, best_x])
-        y_new = gp.predict(x_new_full.reshape(1, -1))[0][0]
+    y_next, _ = gp.predict(x_next_full.reshape(1, -1))
+    y_next = y_next[0]
 
-        # Update model
-        X_train = np.vstack([X_train, x_new_full])
-        y_train = np.append(y_train, y_new)
-        gp.fit(X_train, y_train)
+    X_train = np.vstack([X_train, x_next_full])
+    y_train = np.append(y_train, y_next)
 
-        # Record
-        bo_results.append({
-            'coil': coil_transitions[i],
-            'iter': t,
-            'gap_top': best_x[0],
-            'pressure_top': best_x[1],
-            'predicted_weight': y_new
-        })
+# 5. 결과 DataFrame
+results_df = pd.DataFrame(X_train[:, -2:], columns=["gap", "pressure"])
+results_df["predicted_weight"] = y_train
+results_df["loss"] = np.abs(results_df["predicted_weight"] - y_target)
 
-# visualize results
-
-bo_df = pd.DataFrame(bo_results)
-
-for coil in bo_df['coil'].unique():
-    subset = bo_df[bo_df['coil'] == coil]
-
-    fig, axs = plt.subplots(1, 2, figsize=(12, 5))
-
-    # GAP
-    axs[0].plot(subset['iter'], subset["gap_top"], label="BO Gap", marker='x')
-    axs[0].set_title(f"Gap (Top-side) - {coil}")
-    axs[0].set_xlabel("Iteration")
-    axs[0].set_ylabel("Gap Value")
-    axs[0].legend()
-    axs[0].grid(True)
-
-    # PRESSURE
-    axs[1].plot(subset['iter'], subset["pressure_top"], label="BO Pressure", marker='x')
-    axs[1].set_title(f"Pressure (Top-side) - {coil}")
-    axs[1].set_xlabel("Iteration")
-    axs[1].set_ylabel("Pressure Value")
-    axs[1].legend()
-    axs[1].grid(True)
-
-    plt.suptitle(f"Top-side BO Control Variables - Coil {coil}", fontsize=14)
-    plt.tight_layout()
-    plt.show()
+print(results_df)
+plt.plot(results_df["predicted_weight"], marker="o", label="Predicted Weight")
+plt.axhline(y=y_target, color="r", linestyle="--", label="Target Weight")
+plt.xlabel("Iteration")
+plt.ylabel("Weight")
+plt.legend()
+plt.title("BO Iteration Trace")
+plt.grid(True)
+plt.show()

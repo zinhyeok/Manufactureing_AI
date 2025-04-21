@@ -56,8 +56,12 @@ class GaussianProcess:
 
     @staticmethod
     def squared_exponential_kernel(X1, X2, l=1.0, sigma_f=1.0):
+        """Squared Exponential Kernel (RBF Kernel)"""
+        X1 = np.asarray(X1, dtype=np.float64)
+        X2 = np.asarray(X2, dtype=np.float64)
         sqdist = np.sum(X1**2, axis=1).reshape(-1, 1) + np.sum(X2**2, axis=1) - 2 * np.dot(X1, X2.T)
-        return sigma_f**2 * np.exp(-0.5 / l**2 * sqdist)
+        result = sigma_f**2 * np.exp(-0.5 / l**2 * sqdist)
+        return result
 
 # Example usage
 if __name__ == "__main__":

@@ -70,7 +70,7 @@ env_features_top = ['thickness', 'width', 'speed', 'tension', 'angle_top']
 env_values_top = scaler.transform(subset_top[features_top].values)[:, :len(env_features_top)]
 
 # 목표값 및 실제 제어 변수
-target_weights_top = subset_top['weight_top'].values
+target_weights_top = subset_top['target'].values
 true_gaps_top = subset_top['gap_top'].values
 true_pressures_top = subset_top['pressure_top'].values
 
@@ -178,7 +178,7 @@ env_features_bot = ['thickness', 'width', 'speed', 'tension', 'angle_bot']
 env_values_bot = scaler_bot.transform(subset_bot[features_bot].values)[:, :len(env_features_bot)]
 
 # 목표값 및 실제 제어 변수
-target_weights_bot = subset_bot['weight_bot'].values
+target_weights_bot = subset_bot['target'].values
 true_gaps_bot = subset_bot['gap_bot'].values
 true_pressures_bot = subset_bot['pressure_bot'].values
 
