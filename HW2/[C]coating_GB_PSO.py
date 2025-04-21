@@ -19,7 +19,7 @@ df = pd.read_csv("coating_sampled.csv")
 #ouput: weight
 #steel has two sides: top and bottom -> 2 outputs and model neeeds, and gap, pressure, angle hasw top, bot
 # Step1: weight prediction using input variables
-# Step2: find optimal control variable which min diff of weight, assume that gap and pressure values are unknown??
+# Step2: find optimal control variable which min diff of weight, assume that gap and pressure values are unknown
 
 
 # === Top-side prediction and optimization ===
