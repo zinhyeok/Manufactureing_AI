@@ -90,8 +90,10 @@ for i in range(len(subset_top)):
     def objective(x):
         full_input_raw = np.concatenate([env_input, x])
         mu, _ = gp.predict(full_input_raw.reshape(1, -1))  # predict returns (mu, cov)
-        return (mu[0] - target) ** 2
-
+        pred = mu[0]
+        penalty = np.exp(10 * (target - pred)) if pred < target else 0
+        return (pred - target)**2 + penalty
+    
     x0 = np.array([9.0, 0.27])
     result = minimize(objective, x0, method='BFGS')
 
@@ -203,8 +205,10 @@ for i in range(len(subset_bot)):
 
     def objective(x):
         full_input_raw = np.concatenate([env_input, x])
-        mu, _ = gp_bot.predict(full_input_raw.reshape(1, -1))
-        return (mu[0] - target) ** 2
+        mu, _ = gp.predict(full_input_raw.reshape(1, -1))  # predict returns (mu, cov)
+        pred = mu[0]
+        penalty = np.exp(10 * (target - pred)) if pred < target else 0
+        return (pred - target)**2 + penalty
 
     x0 = np.array([9.0, 0.27])
     result = minimize(objective, x0, method='BFGS')

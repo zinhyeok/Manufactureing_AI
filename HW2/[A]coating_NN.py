@@ -82,14 +82,22 @@ predicted_weights_top = []
 for i in range(len(subset_top)):
     env_input = env_values_top[i]
     target = target_weights_top[i]
-
+    
+    #soft constraint
     def objective(x):
         full_input_raw = np.concatenate([env_input, x])
-        pred = mlp_top.predict(full_input_raw.reshape(1, -1))
-        return (pred[0] - target) ** 2
+        pred = mlp_top.predict(full_input_raw.reshape(1, -1))[0]
+        # penalty = np.exp(10 * (target - pred)) if pred < target else 0
+        penalty = np.exp(2 * (target - pred)) if pred < target else 0
+        return (pred - target)**2 + penalty
 
-    x0 = np.array([9.0, 0.27])
-    result = minimize(objective, x0, method='BFGS')
+    #bound는 EDA결과 gap 7.75~10
+    #pressure 0.2~0.351의 범위였음 
+    bounds = [(7.5, 10.5), (0.2, 0.4)]
+    x0 = np.array([8.5, 0.3])
+
+    #pressure, gap의 범위 설정이 필요, method='L-BFGS-B' 사용으로 변경
+    result = minimize(objective, x0, bounds=bounds, method='L-BFGS-B')
 
     optimized_gaps_top.append(result.x[0])
     optimized_pressures_top.append(result.x[1])
@@ -105,8 +113,9 @@ opt_df_top = pd.DataFrame({
     'opt_pressure': optimized_pressures_top
 })
 
+print(opt_df_top)
 # true_gap vs true_pressure & opt_gap vs opt_pressure 시각화
-fig, axs = plt.subplots(1, 2, figsize=(12, 5))
+fig, axs = plt.subplots(1, 3, figsize=(12, 5))
 
 # GAP
 axs[0].plot(opt_df_top.index, opt_df_top["true_gap"], label="True Gap", marker='o')
@@ -125,6 +134,16 @@ axs[1].set_xlabel("Sample Index")
 axs[1].set_ylabel("Pressure Value")
 axs[1].legend()
 axs[1].grid(True)
+
+# WEIGHT
+axs[2].plot(opt_df_top.index, opt_df_top["target_weight"], label="Target Weight", marker='o')
+axs[2].plot(opt_df_top.index, opt_df_top["predicted_weight"], label="Predicted Weight", marker='x')
+axs[2].get_yaxis().get_major_formatter().set_useOffset(False)
+axs[2].set_title("Weight Prediction (Top-side)")
+axs[2].set_xlabel("Sample Index")
+axs[2].set_ylabel("Weight Value")
+axs[2].legend()
+axs[2].grid(True)
 
 plt.suptitle("Top-side: True vs Optimized Control Variables", fontsize=14)
 plt.tight_layout()
@@ -188,13 +207,18 @@ for i in range(len(subset_bot)):
     env_input = env_values_bot[i]
     target = target_weights_bot[i]
 
+    #soft constraint
     def objective(x):
         full_input_raw = np.concatenate([env_input, x])
-        pred = mlp_bot.predict(full_input_raw.reshape(1, -1))
-        return (pred[0] - target) ** 2
+        pred = mlp_top.predict(full_input_raw.reshape(1, -1))[0]
+        penalty = (target - pred)**2 if pred < target else 0
+        # penalty = np.exp(10 * (target - pred)) if pred < target else 0
+        return (pred - target)**2 + penalty
 
-    x0 = np.array([9.0, 0.27])
-    result = minimize(objective, x0, method='BFGS')
+    #bound는 EDA결과 gap 7.75~10
+    #pressure 0.2~0.351의 범위였음 
+    bounds = [(7.5, 10.5), (0.2, 0.4)]
+    x0 = np.array([8.5, 0.3])
 
     optimized_gaps_bot.append(result.x[0])
     optimized_pressures_bot.append(result.x[1])
@@ -211,12 +235,12 @@ opt_df_bot = pd.DataFrame({
 })
 
 # true_gap vs true_pressure & opt_gap vs opt_pressure 시각화
-fig, axs = plt.subplots(1, 2, figsize=(12, 5))
+fig, axs = plt.subplots(1, 3, figsize=(12, 5))
 
 # GAP
 axs[0].plot(opt_df_bot.index, opt_df_bot["true_gap"], label="True Gap", marker='o')
 axs[0].plot(opt_df_bot.index, opt_df_bot["opt_gap"], label="Optimized Gap", marker='x')
-axs[0].set_title("Gap (Buttom-side)")
+axs[0].set_title("Gap (Bottom-side)")
 axs[0].set_xlabel("Sample Index")
 axs[0].set_ylabel("Gap Value")
 axs[0].legend()
@@ -225,12 +249,23 @@ axs[0].grid(True)
 # PRESSURE
 axs[1].plot(opt_df_bot.index, opt_df_bot["true_pressure"], label="True Pressure", marker='o')
 axs[1].plot(opt_df_bot.index, opt_df_bot["opt_pressure"], label="Optimized Pressure", marker='x')
-axs[1].set_title("Pressure (Buttom-side)")
+axs[1].set_title("Pressure (Bottom-side)")
 axs[1].set_xlabel("Sample Index")
 axs[1].set_ylabel("Pressure Value")
 axs[1].legend()
 axs[1].grid(True)
 
-plt.suptitle("Buttom-side: True vs Optimized Control Variables", fontsize=14)
+# WEIGHT
+axs[2].plot(opt_df_bot.index, opt_df_bot["target_weight"], label="Target Weight", marker='o')
+axs[2].plot(opt_df_bot.index, opt_df_bot["predicted_weight"], label="Predicted Weight", marker='x')
+axs[2].get_yaxis().get_major_formatter().set_useOffset(False)
+axs[2].set_title("Weight Prediction (Bottom-side)")
+axs[2].set_xlabel("Sample Index")
+axs[2].set_ylabel("Weight Value")
+axs[2].legend()
+axs[2].grid(True)
+
+
+plt.suptitle("Bottom-side: True vs Optimized Control Variables", fontsize=14)
 plt.tight_layout()
 plt.show()
