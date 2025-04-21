@@ -19,35 +19,39 @@ df = pd.read_csv("coating_sampled.csv")
 # Step2: find optimal control variable which min diff of weight, assume that gap and pressure values are unknown?
 
 # === Top-side prediction and optimization ===
-# Step 1: Predicting weight using input variables
-# 1. 데이터 분할 (Top-side 모델 학습용)
-features_top = ['thickness', 'width', 'speed', 'tension', 'gap_top', 'pressure_top', 'angle_top']
+
+# Step 1: Predicting weight using input variables (Top-side)
+features_top = ['thickness', 'width', 'speed', 'tension', 'gap_top', 'pressure_top']
+env_features_top = ['thickness', 'width', 'speed', 'tension']
+ctrl_features_top = ['gap_top', 'pressure_top']
 target_top = 'weight_top'
 
-X = df[features_top].values
-y = df[target_top].values
+X_env_top = df[env_features_top].values
+X_ctrl_top = df[ctrl_features_top].values
+y_top = df[target_top].values
 
-# Train/test split
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+X_env_train, X_env_test, X_ctrl_train, X_ctrl_test, y_train, y_test = train_test_split(
+    X_env_top, X_ctrl_top, y_top, test_size=0.2, random_state=42
+)
 
-# 2. 데이터 전처리 (StandardScaler 사용)
-scaler = StandardScaler()
-X_train = scaler.fit_transform(X_train)
-X_test = scaler.transform(X_test)
+scaler_env_top = StandardScaler()
+X_env_train_scaled = scaler_env_top.fit_transform(X_env_train)
+X_env_test_scaled = scaler_env_top.transform(X_env_test)
+
+X_train = np.hstack([X_env_train_scaled, X_ctrl_train])
+X_test = np.hstack([X_env_test_scaled, X_ctrl_test])
 
 # GP 모델 학습
 gp = GaussianProcess(kernel=lambda X1, X2: GaussianProcess.squared_exponential_kernel(X1, X2), noise=1e-2)
 gp.fit(X_train, y_train)
-gp.optimize_hyperparameters(bounds=((1e-3, 100.0), (1e-3, 100.0))) # Optimize hyperparameters + refit
+gp.optimize_hyperparameters(bounds=((1e-3, 100.0), (1e-3, 100.0)))
 
-# 3. 예측 및 평가
 y_pred, cov = gp.predict(X_test)
 std = np.sqrt(np.diag(cov))
 
 r2 = r2_score(y_test, y_pred)
 mse = mean_squared_error(y_test, y_pred)
 
-# 시각화용 데이터 정리
 plt.figure(figsize=(6, 6))
 plt.errorbar(y_test, y_pred, yerr=2 * std, fmt='o', alpha=0.6, label='Prediction ± 2σ')
 plt.plot([min(y_test), max(y_test)], [min(y_test), max(y_test)], color='red', linestyle='--', label='Perfect prediction')
@@ -59,65 +63,52 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
-r2, mse
-
-# FIXME: r2 -9.35, mse = 2222 나옴
-# => GP 모델의 noise를 1e-5에서 1e-2로 변경하여 noise를 증가, 기존 kernel의 초기 hyperparameter를 l을 1.0에서 0.5로, sigma_f의 탐색범위를 100으로 늘림 
-# l의 변경이 유효함r2 0.97로 개선
-
-#Step 2: Finding optimal control variables (gap, pressure) for top-side model
-# 1. coil == CRG2188 앞 16개 추출 (top)
+# Step 2: Top-side PSO optimization
 subset_top = df[df['coil'].str.strip() == 'CRG2188'].head(16)
+env_values_top = scaler_env_top.transform(subset_top[env_features_top].values)
 
-# 환경 변수 추출 및 정규화 (top 기준)
-env_features_top = ['thickness', 'width', 'speed', 'tension', 'angle_top']
-env_values_top = scaler.transform(subset_top[features_top].values)[:, :len(env_features_top)]
-
-# 목표값 및 실제 제어 변수
 target_weights_top = subset_top['target'].values
 true_gaps_top = subset_top['gap_top'].values
 true_pressures_top = subset_top['pressure_top'].values
 
-# ✅ PSO 최적화 
 optimized_gaps_top = []
 optimized_pressures_top = []
 predicted_weights_top = []
 
-bounds = [(5.0, 13.0), (0.2, 0.35)]  # practical bounds for gap and pressure
+bounds = [(7.0, 10.5), (0.2, 0.38)]
 
 for i in range(len(subset_top)):
     env_input = env_values_top[i]
     target = target_weights_top[i]
 
-    def objective(x, env=env_input, target=target):
-        full_input = np.concatenate([env, x])
+    def objective(x):
+        full_input = np.concatenate([env_input, x])
         mu, _ = gp.predict(full_input.reshape(1, -1))
-        return (mu[0] - target) ** 2
+        pred = mu[0]
+        penalty = np.exp(5 * (target - pred)) if pred < target else 0
+        return (pred - target)**2 + penalty
 
-    # PSO expects a function of two variables (x[0], x[1])
     wrapped_objective = lambda x1, x2: objective(np.array([x1, x2]))
-
     pso = PSO(wrapped_objective, bounds=np.array(bounds).T, max_iter=50, num_particles=30)
     best_pos, best_val, _, _ = pso.optimize()
 
     optimized_gaps_top.append(best_pos[0])
     optimized_pressures_top.append(best_pos[1])
-
     mu_pred, _ = gp.predict(np.concatenate([env_input, best_pos]).reshape(1, -1))
     predicted_weights_top.append(mu_pred[0])
 
-# 결과 정리
 opt_df_top = pd.DataFrame({
     'target_weight': target_weights_top,
     'predicted_weight': predicted_weights_top,
     'true_gap': true_gaps_top,
     'opt_gap': optimized_gaps_top,
     'true_pressure': true_pressures_top,
-    'opt_pressure': optimized_pressures_top
+    'opt_pressure': optimized_pressures_top,
+    'weight_top': subset_top['weight_top'].values
 })
 
 # true_gap vs true_pressure & opt_gap vs opt_pressure 시각화
-fig, axs = plt.subplots(1, 2, figsize=(12, 5))
+fig, axs = plt.subplots(1, 3, figsize=(12, 5))
 
 # GAP
 axs[0].plot(opt_df_top.index, opt_df_top["true_gap"], label="True Gap", marker='o')
@@ -137,29 +128,46 @@ axs[1].set_ylabel("Pressure Value")
 axs[1].legend()
 axs[1].grid(True)
 
+# WEIGHT
+axs[2].plot(opt_df_top.index, opt_df_top["target_weight"], label="Target Weight", marker='o')
+axs[2].plot(opt_df_top.index, opt_df_top["predicted_weight"], label="Predicted Weight", marker='x')
+axs[2].plot(opt_df_top.index, opt_df_top["weight_top"], label="Actual Weight", marker='^')
+axs[2].get_yaxis().get_major_formatter().set_useOffset(False)
+axs[2].set_title("Weight Prediction (Top-side)")
+axs[2].set_xlabel("Sample Index")
+axs[2].set_ylabel("Weight Value")
+axs[2].legend()
+axs[2].grid(True)
+
 plt.suptitle("Top-side: True vs Optimized Control Variables", fontsize=14)
 plt.tight_layout()
 plt.show()
 
 # === Bottom-side prediction and optimization ===
 
-# Step 1: Predicting weight using input variables (Bottom-side model)
-# 1. 변수 설정
-features_bot = ['thickness', 'width', 'speed', 'tension', 'gap_bot', 'pressure_bot', 'angle_bot']
+features_bot = ['thickness', 'width', 'speed', 'tension', 'gap_bot', 'pressure_bot']
+env_features_bot = ['thickness', 'width', 'speed', 'tension']
+ctrl_features_bot = ['gap_bot', 'pressure_bot']
 target_bot = 'weight_bot'
 
-Xb = df[features_bot].values
-yb = df[target_bot].values
+X_env_bot = df[env_features_bot].values
+X_ctrl_bot = df[ctrl_features_bot].values
+y_bot = df[target_bot].values
 
-# 2. 정규화 및 분할
-scaler_bot = StandardScaler()
-Xb_scaled = scaler_bot.fit_transform(Xb)
-Xb_train, Xb_test, yb_train, yb_test = train_test_split(Xb_scaled, yb, test_size=0.2, random_state=42)
+X_env_train, X_env_test, X_ctrl_train, X_ctrl_test, yb_train, yb_test = train_test_split(
+    X_env_bot, X_ctrl_bot, y_bot, test_size=0.2, random_state=42
+)
 
-# ✅ Gaussian Process 모델 학습
+scaler_env_bot = StandardScaler()
+X_env_train_scaled = scaler_env_bot.fit_transform(X_env_train)
+X_env_test_scaled = scaler_env_bot.transform(X_env_test)
+
+Xb_train = np.hstack([X_env_train_scaled, X_ctrl_train])
+Xb_test = np.hstack([X_env_test_scaled, X_ctrl_test])
+
 gp_bot = GaussianProcess(kernel=lambda X1, X2: GaussianProcess.squared_exponential_kernel(X1, X2), noise=1e-2)
 gp_bot.fit(Xb_train, yb_train)
-gp_bot.optimize_hyperparameters(bounds=((1e-3, 100.0), (1e-3, 100.0))) # Optimize hyperparameters + refit
+gp_bot.optimize_hyperparameters(bounds=((1e-3, 100.0), (1e-3, 100.0)))
 
 yb_pred, cov_bot = gp_bot.predict(Xb_test)
 std_bot = np.sqrt(np.diag(cov_bot))
@@ -167,8 +175,6 @@ std_bot = np.sqrt(np.diag(cov_bot))
 r2 = r2_score(yb_test, yb_pred)
 mse = mean_squared_error(yb_test, yb_pred)
 
-
-# 시각화용 데이터 정리
 plt.figure(figsize=(6, 6))
 plt.errorbar(yb_test, yb_pred, yerr=2 * std_bot, fmt='o', alpha=0.6, label='Prediction ± 2σ')
 plt.plot([min(yb_test), max(yb_test)], [min(yb_test), max(yb_test)], color='red', linestyle='--', label='Perfect prediction')
@@ -180,23 +186,14 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
-r2, mse
-
-# Step 2: Finding optimal control variables (gap, pressure) for bottom-side model
-
-# 1. coil == CRG2188 앞 16개 추출 (bot용)
+# Step 2: Bottom-side PSO optimization
 subset_bot = df[df['coil'].str.strip() == 'CRG2188'].head(16)
+env_values_bot = scaler_env_bot.transform(subset_bot[env_features_bot].values)
 
-# 환경 변수 추출 및 정규화 (bot 기준)
-env_features_bot = ['thickness', 'width', 'speed', 'tension', 'angle_bot']
-env_values_bot = scaler_bot.transform(subset_bot[features_bot].values)[:, :len(env_features_bot)]
-
-# 목표값 및 실제 제어 변수
 target_weights_bot = subset_bot['target'].values
 true_gaps_bot = subset_bot['gap_bot'].values
 true_pressures_bot = subset_bot['pressure_bot'].values
 
-# ✅ PSO 최적화 변경
 optimized_gaps_bot = []
 optimized_pressures_bot = []
 predicted_weights_bot = []
@@ -205,39 +202,38 @@ for i in range(len(subset_bot)):
     env_input = env_values_bot[i]
     target = target_weights_bot[i]
 
-    def objective(x, env=env_input, target=target):
-        full_input = np.concatenate([env, x])
+    def objective(x):
+        full_input = np.concatenate([env_input, x])
         mu, _ = gp_bot.predict(full_input.reshape(1, -1))
-        return (mu[0] - target) ** 2
+        pred = mu[0]
+        penalty = np.exp(5 * (target - pred)) if pred < target else 0
+        return (pred - target)**2 + penalty
 
     wrapped_objective = lambda x1, x2: objective(np.array([x1, x2]))
-
     pso = PSO(wrapped_objective, bounds=np.array(bounds).T, max_iter=50, num_particles=30)
     best_pos, best_val, _, _ = pso.optimize()
 
     optimized_gaps_bot.append(best_pos[0])
     optimized_pressures_bot.append(best_pos[1])
-
     mu_pred, _ = gp_bot.predict(np.concatenate([env_input, best_pos]).reshape(1, -1))
     predicted_weights_bot.append(mu_pred[0])
 
-# 결과 정리
 opt_df_bot = pd.DataFrame({
     'target_weight': target_weights_bot,
     'predicted_weight': predicted_weights_bot,
     'true_gap': true_gaps_bot,
     'opt_gap': optimized_gaps_bot,
     'true_pressure': true_pressures_bot,
-    'opt_pressure': optimized_pressures_bot
+    'opt_pressure': optimized_pressures_bot,
+    'weight_bot': subset_bot['weight_bot'].values
 })
-
 # true_gap vs true_pressure & opt_gap vs opt_pressure 시각화
-fig, axs = plt.subplots(1, 2, figsize=(12, 5))
+fig, axs = plt.subplots(1, 3, figsize=(12, 5))
 
 # GAP
 axs[0].plot(opt_df_bot.index, opt_df_bot["true_gap"], label="True Gap", marker='o')
 axs[0].plot(opt_df_bot.index, opt_df_bot["opt_gap"], label="Optimized Gap", marker='x')
-axs[0].set_title("Gap (Buttom-side)")
+axs[0].set_title("Gap (Bottom-side)")
 axs[0].set_xlabel("Sample Index")
 axs[0].set_ylabel("Gap Value")
 axs[0].legend()
@@ -246,12 +242,24 @@ axs[0].grid(True)
 # PRESSURE
 axs[1].plot(opt_df_bot.index, opt_df_bot["true_pressure"], label="True Pressure", marker='o')
 axs[1].plot(opt_df_bot.index, opt_df_bot["opt_pressure"], label="Optimized Pressure", marker='x')
-axs[1].set_title("Pressure (Buttom-side)")
+axs[1].set_title("Pressure (Bottom-side)")
 axs[1].set_xlabel("Sample Index")
 axs[1].set_ylabel("Pressure Value")
 axs[1].legend()
 axs[1].grid(True)
 
-plt.suptitle("Buttom-side: True vs Optimized Control Variables", fontsize=14)
+# WEIGHT
+axs[2].plot(opt_df_bot.index, opt_df_bot["target_weight"], label="Target Weight", marker='o')
+axs[2].plot(opt_df_bot.index, opt_df_bot["predicted_weight"], label="Predicted Weight", marker='x')
+axs[2].plot(opt_df_bot.index, opt_df_bot["weight_bot"], label="Actual Weight", marker='^')
+axs[2].get_yaxis().get_major_formatter().set_useOffset(False)
+axs[2].set_title("Weight Prediction (Bottom-side)")
+axs[2].set_xlabel("Sample Index")
+axs[2].set_ylabel("Weight Value")
+axs[2].legend()
+axs[2].grid(True)
+
+
+plt.suptitle("Bottom-side: True vs Optimized Control Variables", fontsize=14)
 plt.tight_layout()
 plt.show()
